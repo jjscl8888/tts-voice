@@ -227,7 +227,18 @@ class PronunciationApp {
       formData.append('language', this.languageSelect.value);
 
       const response = await fetch('/api/assess', { method: 'POST', body: formData });
-      const result = await response.json();
+      const raw = await response.text();
+      let result;
+      try {
+        result = JSON.parse(raw);
+      } catch {
+        if (raw.trimStart().startsWith('<')) {
+          throw new Error(
+            '收到网页而非接口数据。请运行 npm start，在浏览器打开 http://localhost:3000/speech.html；不要用 Live Server 等方式单独打开 public 目录。'
+          );
+        }
+        throw new Error('无法解析服务响应');
+      }
 
       if (!response.ok) throw new Error(result.error || '评测失败');
       if (result.success) {

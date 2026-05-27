@@ -12,8 +12,6 @@ const PORT = 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) {
@@ -156,6 +154,10 @@ app.delete('/api/audio/:filename', (req, res) => {
   }
   res.json({ success: true });
 });
+
+// 静态资源放在 API 之后，避免未预期地拦截或混淆路由
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/uploads', express.static(uploadsDir));
 
 app.listen(PORT, () => {
   console.log(`✅ 服务已启动: http://localhost:${PORT}`);
