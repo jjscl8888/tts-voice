@@ -1,3 +1,122 @@
+
+# Node.js + Edge-TTS 网页配置朗读系统
+
+## 项目结构
+
+```
+edge-tts-web/
+├── package.json
+├── server.js
+└── public/
+    └── index.html
+```
+
+## 1. package.json
+
+```json
+{
+  "name": "edge-tts-web",
+  "version": "1.0.0",
+  "description": "Edge TTS Web Interface",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "edge-tts": "^1.3.0"
+  }
+}
+```
+
+## 2. server.js
+
+```javascript
+const express = require('express');
+const path = require('path');
+const { MsEdgeTTS, OUTPUT_FORMAT } = require('edge-tts');
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 获取可用音色列表
+app.get('/api/voices', async (req, res) => {
+  try {
+    const voices = await MsEdgeTTS.getVoices();
+    res.json(voices);
+  } catch (error) {
+    console.error('获取音色失败:', error);
+    res.status(500).json({ error: '获取音色列表失败' });
+  }
+});
+
+// 合成语音
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text, voice, rate, pitch, volume } = req.body;
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: '请输入文本' });
+    }
+
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(
+      voice || 'zh-CN-XiaoxiaoNeural',
+      OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3
+    );
+
+    // 构建 prosody 参数
+    const rateStr = rate ? `${rate}%` : '+0%';
+    const pitchStr = pitch ? `${pitch}Hz` : '+0Hz';
+    const volumeStr = volume ? `${volume}%` : '+0%';
+
+    const readable = tts.toStream(text, {
+      rate: rateStr,
+      pitch: pitchStr,
+      volume: volumeStr
+    });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Content-Disposition', 'inline; filename="speech.mp3"');
+
+    const chunks = [];
+    readable.on('data', (chunk) => {
+      // edge-tts 返回的 data 事件中包含 audio 数据
+      if (chunk.audio) {
+        chunks.push(chunk.audio);
+      }
+    });
+
+    readable.on('end', () => {
+      const buffer = Buffer.concat(chunks);
+      res.send(buffer);
+    });
+
+    readable.on('error', (err) => {
+      console.error('TTS流错误:', err);
+      if (!res.headersSent) {
+        res.status(500).json({ error: '语音合成失败' });
+      }
+    });
+
+  } catch (error) {
+    console.error('TTS合成错误:', error);
+    res.status(500).json({ error: '语音合成失败: ' + error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ Edge-TTS 服务已启动: http://localhost:${PORT}`);
+});
+```
+
+## 3. public/index.html
+
+```html
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -269,38 +388,6 @@
       gap: 8px;
     }
 
-    .app-nav {
-      max-width: 800px;
-      margin: 0 auto 20px;
-      display: flex;
-      gap: 8px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 12px;
-      padding: 6px;
-    }
-
-    .app-nav a {
-      flex: 1;
-      text-align: center;
-      padding: 10px 16px;
-      border-radius: 8px;
-      color: #b0b0b0;
-      text-decoration: none;
-      font-weight: 500;
-      transition: all 0.2s;
-    }
-
-    .app-nav a:hover {
-      color: #7bb8ff;
-      background: rgba(58, 123, 213, 0.15);
-    }
-
-    .app-nav a.active {
-      background: linear-gradient(135deg, #00d2ff, #3a7bd5);
-      color: #fff;
-    }
-
     @media (max-width: 600px) {
       .settings-grid {
         grid-template-columns: 1fr;
@@ -312,14 +399,10 @@
   </style>
 </head>
 <body>
-  <nav class="app-nav">
-    <a href="/" class="active">🔊 语音合成</a>
-    <a href="/speech.html">🎙️ 发音评测</a>
-  </nav>
-
   <div class="container">
     <h1>🔊 Edge-TTS 语音合成</h1>
 
+    <!-- 文本输入 -->
     <div class="card">
       <div class="section-title">📝 输入文本</div>
       <div class="presets">
@@ -334,6 +417,7 @@
       </div>
     </div>
 
+    <!-- 音色选择 -->
     <div class="card">
       <div class="section-title">🎙️ 音色设置</div>
       <div class="filter-group">
@@ -354,6 +438,7 @@
       </div>
     </div>
 
+    <!-- 参数调节 -->
     <div class="card">
       <div class="section-title">⚙️ 参数调节</div>
       <div class="settings-grid">
@@ -381,6 +466,7 @@
       </div>
     </div>
 
+    <!-- 操作按钮 -->
     <div class="card">
       <div class="btn-group">
         <button class="btn btn-primary" id="synthBtn" onclick="synthesize()">
@@ -404,6 +490,7 @@
     let allVoices = [];
     let currentAudioUrl = null;
 
+    // 预设文本
     const presetTexts = {
       zh: '你好！欢迎使用 Edge TTS 语音合成系统。今天天气真不错，适合出去走走。',
       en: 'Hello! Welcome to the Edge TTS speech synthesis system. It supports multiple languages and voices.',
@@ -416,6 +503,7 @@
       document.getElementById('text').value = presetTexts[lang];
     }
 
+    // 更新滑块显示
     function updateSlider(type) {
       const value = document.getElementById(type).value;
       const display = document.getElementById(type + 'Value');
@@ -426,11 +514,13 @@
       }
     }
 
+    // 加载音色列表
     async function loadVoices() {
       try {
         const response = await fetch('/api/voices');
         allVoices = await response.json();
-
+        
+        // 提取语言列表
         const langs = [...new Set(allVoices.map(v => v.Locale))].sort();
         const langFilter = document.getElementById('langFilter');
         langs.forEach(lang => {
@@ -440,6 +530,7 @@
           langFilter.appendChild(option);
         });
 
+        // 默认选择中文
         langFilter.value = 'zh-CN';
         filterVoices();
       } catch (error) {
@@ -448,6 +539,7 @@
       }
     }
 
+    // 获取语言友好名称
     function getLangName(locale) {
       const names = {
         'zh-CN': '中文(普通话)', 'zh-TW': '中文(台湾)', 'zh-HK': '中文(粤语)',
@@ -459,17 +551,18 @@
       return names[locale] || locale;
     }
 
+    // 筛选音色
     function filterVoices() {
       const lang = document.getElementById('langFilter').value;
       const gender = document.getElementById('genderFilter').value;
-
+      
       let filtered = allVoices;
       if (lang) filtered = filtered.filter(v => v.Locale === lang);
       if (gender) filtered = filtered.filter(v => v.Gender === gender);
 
       const voiceSelect = document.getElementById('voice');
       voiceSelect.innerHTML = '';
-
+      
       filtered.forEach(v => {
         const option = document.createElement('option');
         option.value = v.ShortName;
@@ -488,6 +581,7 @@
       updateVoiceInfo();
     }
 
+    // 显示音色信息
     function updateVoiceInfo() {
       const voiceSelect = document.getElementById('voice');
       const selected = voiceSelect.value;
@@ -502,6 +596,7 @@
 
     document.getElementById('voice').addEventListener('change', updateVoiceInfo);
 
+    // 合成语音
     async function synthesize() {
       const text = document.getElementById('text').value.trim();
       if (!text) {
@@ -537,7 +632,8 @@
         }
 
         const blob = await response.blob();
-
+        
+        // 释放之前的URL
         if (currentAudioUrl) {
           URL.revokeObjectURL(currentAudioUrl);
         }
@@ -545,10 +641,10 @@
         currentAudioUrl = URL.createObjectURL(blob);
         const audio = document.getElementById('audio');
         audio.src = currentAudioUrl;
-
+        
         document.getElementById('audioPlayer').classList.add('show');
         audio.play();
-
+        
         setStatus('✅ 合成成功，正在播放', 'success');
       } catch (error) {
         setStatus('❌ ' + error.message, 'error');
@@ -557,6 +653,7 @@
       }
     }
 
+    // 下载音频
     function downloadAudio() {
       if (!currentAudioUrl) {
         setStatus('请先合成语音', 'error');
@@ -568,6 +665,7 @@
       a.click();
     }
 
+    // 停止播放
     function stopAudio() {
       const audio = document.getElementById('audio');
       audio.pause();
@@ -575,19 +673,153 @@
       setStatus('已停止', 'success');
     }
 
+    // 状态显示
     function setStatus(msg, type) {
       const status = document.getElementById('status');
       status.textContent = msg;
       status.className = 'status ' + type;
     }
 
+    // 键盘快捷键
     document.addEventListener('keydown', (e) => {
       if (e.ctrlKey && e.key === 'Enter') {
         synthesize();
       }
     });
 
+    // 初始化
     loadVoices();
   </script>
 </body>
 </html>
+```
+
+## 4. 备选 server.js（使用 edge-tts-node 命令行方式）
+
+如果 `edge-tts` npm 包有兼容性问题，可用 `msedge-tts` 包替代：
+
+```javascript
+// server.js - 使用 msedge-tts 替代方案
+const express = require('express');
+const path = require('path');
+
+const app = express();
+const PORT = 3000;
+
+app.use(express.json());
+app.use(express.static(path.join(__dirname, 'public')));
+
+// 动态导入 msedge-tts（ESM模块）
+let MsEdgeTTS, OUTPUT_FORMAT;
+
+async function initTTS() {
+  const module = await import('msedge-tts');
+  MsEdgeTTS = module.MsEdgeTTS;
+  OUTPUT_FORMAT = module.OUTPUT_FORMAT;
+}
+
+app.get('/api/voices', async (req, res) => {
+  try {
+    if (!MsEdgeTTS) await initTTS();
+    const tts = new MsEdgeTTS();
+    const voices = await MsEdgeTTS.getVoices();
+    res.json(voices);
+  } catch (error) {
+    console.error('获取音色失败:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    if (!MsEdgeTTS) await initTTS();
+    
+    const { text, voice, rate, pitch, volume } = req.body;
+    if (!text || !text.trim()) {
+      return res.status(400).json({ error: '请输入文本' });
+    }
+
+    const tts = new MsEdgeTTS();
+    await tts.setMetadata(
+      voice || 'zh-CN-XiaoxiaoNeural',
+      OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3
+    );
+
+    const options = {};
+    if (rate) options.rate = `${rate}%`;
+    if (pitch) options.pitch = `${pitch}Hz`;
+    if (volume) options.volume = `${volume}%`;
+
+    const readable = tts.toStream(text, options);
+    
+    res.setHeader('Content-Type', 'audio/mpeg');
+    
+    const chunks = [];
+    readable.on('data', (data) => {
+      if (data.audio) {
+        chunks.push(data.audio);
+      }
+    });
+    
+    readable.on('close', () => {
+      const buffer = Buffer.concat(chunks);
+      res.end(buffer);
+    });
+
+    readable.on('error', (err) => {
+      if (!res.headersSent) {
+        res.status(500).json({ error: err.message });
+      }
+    });
+
+  } catch (error) {
+    console.error('TTS错误:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(`✅ 服务已启动: http://localhost:${PORT}`);
+});
+```
+
+## 5. 启动方式
+
+```bash
+# 初始化项目
+mkdir edge-tts-web && cd edge-tts-web
+npm init -y
+
+# 安装依赖（二选一）
+npm install express msedge-tts
+# 或
+npm install express edge-tts
+
+# 启动
+node server.js
+```
+
+浏览器访问 `http://localhost:3000`
+
+## 6. 功能说明
+
+| 功能 | 说明 |
+|------|------|
+| 🌍 多语言 | 支持 100+ 语言/地区 |
+| 🎙️ 多音色 | 400+ 种音色可选 |
+| 🔍 筛选 | 按语言、性别快速筛选 |
+| ⚡ 语速调节 | -100% ~ +200% |
+| 🎵 音调调节 | -50Hz ~ +50Hz |
+| 🔊 音量调节 | -50% ~ +50% |
+| 💾 下载 | 支持下载 MP3 |
+| ⌨️ 快捷键 | Ctrl+Enter 快速合成 |
+| 📱 响应式 | 适配手机/平板 |
+
+## 7. 效果预览
+
+页面是暗色调 glassmorphism 风格，包含：
+- 文本输入区 + 预设示例按钮
+- 语言/性别筛选 + 音色下拉选择
+- 语速/音调/音量滑块调节
+- 合成播放/下载/停止按钮
+- 内嵌音频播放器
